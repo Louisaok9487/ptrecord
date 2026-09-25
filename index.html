@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en-NZ">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Workout Log</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --bg:#11131a; --card:#1b1f2a; --line:#2b3242;
+    --text:#eef1f7; --dim:#8b95a9; --accent:#4ade80; --warn:#f87171;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       padding:16px 14px 40px;max-width:520px;margin:0 auto}
+  h1{font-size:19px;margin:0 0 14px;letter-spacing:.3px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px}
+  label{display:block;font-size:12px;color:var(--dim);margin:0 0 5px;text-transform:uppercase;letter-spacing:.6px}
+  select,input{width:100%;padding:13px;font-size:17px;background:#141824;color:var(--text);
+       border:1px solid var(--line);border-radius:10px;appearance:none}
+  select:focus,input:focus{outline:none;border-color:var(--accent)}
+  .row{display:flex;gap:10px}
+  .row>div{flex:1}
+  .field{margin-bottom:12px}
+  button{width:100%;padding:15px;font-size:17px;font-weight:600;border:0;border-radius:10px;
+       background:var(--accent);color:#08210f}
+  button:active{opacity:.75}
+  .last{font-size:14px;color:var(--dim);margin:2px 0 12px;min-height:20px}
+  .last b{color:var(--text)}
+  .up{color:var(--accent)} .down{color:var(--warn)}
+  table{width:100%;border-collapse:collapse;font-size:15px}
+  td{padding:9px 4px;border-bottom:1px solid var(--line)}
+  td.d{color:var(--dim);width:95px;font-size:14px}
+  td.w{text-align:right;font-weight:600}
+  td.x{width:26px;text-align:right;color:var(--dim)}
+  .empty{color:var(--dim);font-size:14px;padding:6px 0}
+  #msg{font-size:14px;min-height:20px;margin-top:8px;text-align:center}
+  h2{font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin:0 0 8px}
+</style>
+</head>
+<body>
+
+<h1>Workout Log</h1>
+
+<div class="card">
+  <div class="field">
+    <label for="ex">Exercise</label>
+    <select id="ex"></select>
+  </div>
+  <div class="last" id="last"></div>
+  <div class="row field">
+    <div>
+      <label for="kg">Weight (kg)</label>
+      <input id="kg" type="number" inputmode="decimal" step="0.5" placeholder="16">
+    </div>
+    <div>
+      <label for="reps">Reps</label>
+      <input id="reps" type="number" inputmode="numeric" placeholder="12">
+    </div>
+  </div>
+  <div class="field">
+    <label for="date">Date</label>
+    <input id="date" type="date">
+  </div>
+  <button id="save">Save</button>
+  <div id="msg"></div>
+</div>
+
+<div class="card">
+  <h2>History</h2>
+  <div id="hist"><div class="empty">Pick an exercise.</div></div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://tnujsnfzymuuvgpewlfs.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRudWpzbmZ6eW11dXZncGV3bGZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTE5OTQsImV4cCI6MjA4ODIyNzk5NH0.hsLfEeV7kzhguWyWFh9eBt7AcPhw8cQlCOiUzzgysjc";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const PLAN = {
+  "Chest": ["DB Incline Press","Incline DB Fly","Front Machine Press","Cross Cable","Cable Fly","Flat Bench DB Press","Bar Dips (bodyweight)"],
+  "Back":  ["T-Bar Rows","Seated Rowing","One Hand DB Rowing","Incline Dumbbell Pullover"],
+  "Traps": ["Shrugs on Smith Machine from Back","Seated DB Shrugs"],
+  "Delts": ["Shoulder DB Press","Lateral Raises","Seated Front Raises","Pec Dec Reverse Fly","Wide Grip Upright Row"],
+  "Biceps":["Hammer Curls","E-Z Bar Curls"],
+  "Triceps":["Straight Bar Pushdown","Overhead DB Extension"],
+  "Legs":  ["Leg Extension","Smith Machine Squats / Hack Squats","Leg Press","Lunges","Leg Curl"],
+  "Calves":["Standing Smith Machine Calf Raises","Seated Calf Raises"],
+  "Abs":   ["Hanging Leg Raises","Reverse Cable Crunch","Decline Weighted Sit Ups","Cable Crunch with Rope","Side Plank with DB Standing Twist","Decline Bench Leg Raises","Ab-Wheel Roll Out"]
+};
+
+const $ = id => document.getElementById(id);
+const exSel = $("ex");
+
+for (const [group, list] of Object.entries(PLAN)) {
+  const og = document.createElement("optgroup");
+  og.label = group;
+  list.forEach(name => {
+    const o = document.createElement("option");
+    o.value = name; o.textContent = name; o.dataset.group = group;
+    og.appendChild(o);
+  });
+  exSel.appendChild(og);
+}
+
+$("date").value = new Date().toLocaleDateString("en-CA");
+exSel.value = localStorage.getItem("lastEx") || exSel.options[0].value;
+
+const fmtDate = s => {
+  const [y,m,d] = s.split("-");
+  return `${d}/${m}/${y.slice(2)}`;
+};
+
+async function load() {
+  const name = exSel.value;
+  localStorage.setItem("lastEx", name);
+  $("hist").innerHTML = '<div class="empty">Loading…</div>';
+  const { data, error } = await sb.from("workout_log")
+    .select("id,logged_on,weight_kg,reps")
+    .eq("exercise", name)
+    .order("logged_on", { ascending:false })
+    .order("id", { ascending:false })
+    .limit(20);
+
+  if (error) { $("hist").innerHTML = `<div class="empty">${error.message}</div>`; return; }
+
+  if (!data.length) {
+    $("last").innerHTML = "No record yet — first one sets the baseline.";
+    $("hist").innerHTML = '<div class="empty">Nothing logged for this exercise.</div>';
+    return;
+  }
+
+  const best = Math.max(...data.map(r => Number(r.weight_kg) || 0));
+  const l = data[0];
+  $("last").innerHTML = `Last: <b>${l.weight_kg ?? "–"} kg</b>${l.reps ? " × " + l.reps : ""} on <b>${fmtDate(l.logged_on)}</b> &nbsp;·&nbsp; Best: <b>${best} kg</b>`;
+
+  $("hist").innerHTML = "<table>" + data.map((r,i) => {
+    const prev = data[i+1];
+    let arrow = "";
+    if (prev && r.weight_kg != null && prev.weight_kg != null) {
+      const diff = Number(r.weight_kg) - Number(prev.weight_kg);
+      if (diff > 0) arrow = '<span class="up">▲</span>';
+      else if (diff < 0) arrow = '<span class="down">▼</span>';
+    }
+    return `<tr><td class="d">${fmtDate(r.logged_on)}</td>
+      <td>${r.reps ? r.reps + " reps" : ""}</td>
+      <td class="w">${r.weight_kg ?? "–"} kg</td>
+      <td class="x">${arrow}</td></tr>`;
+  }).join("") + "</table>";
+}
+
+$("save").onclick = async () => {
+  const kg = $("kg").value.trim();
+  if (kg === "") { $("msg").innerHTML = '<span class="down">Enter a weight.</span>'; return; }
+  const opt = exSel.selectedOptions[0];
+  $("save").disabled = true; $("msg").textContent = "Saving…";
+
+  const { error } = await sb.from("workout_log").insert({
+    logged_on: $("date").value,
+    muscle_group: opt.dataset.group,
+    exercise: opt.value,
+    weight_kg: Number(kg),
+    reps: $("reps").value ? Number($("reps").value) : null
+  });
+
+  $("save").disabled = false;
+  if (error) { $("msg").innerHTML = `<span class="down">${error.message}</span>`; return; }
+  $("msg").innerHTML = '<span class="up">Saved ✓</span>';
+  $("kg").value = ""; $("reps").value = "";
+  setTimeout(() => $("msg").textContent = "", 2000);
+  load();
+};
+
+exSel.onchange = load;
+load();
+</script>
+</body>
+</html>

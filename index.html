@@ -14,7 +14,11 @@
   body{margin:0;background:var(--bg);color:var(--text);
        font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
        padding:16px 14px 40px;max-width:520px;margin:0 auto}
-  h1{font-size:19px;margin:0 0 14px;letter-spacing:.3px}
+  h1{font-size:19px;margin:0 0 12px;letter-spacing:.3px}
+  .tabs{display:flex;gap:8px;margin-bottom:14px}
+  .tabs button{flex:1;padding:11px;font-size:15px;font-weight:600;border-radius:10px;
+       background:var(--card);color:var(--dim);border:1px solid var(--line)}
+  .tabs button.on{background:var(--accent);color:#08210f;border-color:var(--accent)}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px}
   label{display:block;font-size:12px;color:var(--dim);margin:0 0 5px;text-transform:uppercase;letter-spacing:.6px}
   select,input{width:100%;padding:13px;font-size:17px;background:#141824;color:var(--text);
@@ -23,53 +27,77 @@
   .row{display:flex;gap:10px}
   .row>div{flex:1}
   .field{margin-bottom:12px}
-  button{width:100%;padding:15px;font-size:17px;font-weight:600;border:0;border-radius:10px;
+  #save{width:100%;padding:15px;font-size:17px;font-weight:600;border:0;border-radius:10px;
        background:var(--accent);color:#08210f}
-  button:active{opacity:.75}
+  #save:active{opacity:.75}
   .last{font-size:14px;color:var(--dim);margin:2px 0 12px;min-height:20px}
   .last b{color:var(--text)}
   .up{color:var(--accent)} .down{color:var(--warn)}
   table{width:100%;border-collapse:collapse;font-size:15px}
-  td{padding:9px 4px;border-bottom:1px solid var(--line)}
+  td{padding:9px 4px;border-bottom:1px solid var(--line);vertical-align:top}
   td.d{color:var(--dim);width:95px;font-size:14px}
-  td.w{text-align:right;font-weight:600}
+  td.w{text-align:right;font-weight:600;white-space:nowrap}
   td.x{width:26px;text-align:right;color:var(--dim)}
+  td.del{width:34px;text-align:right}
+  .del button{background:none;border:0;color:var(--dim);font-size:19px;padding:2px 4px;line-height:1}
+  .del button:active{color:var(--warn)}
   .empty{color:var(--dim);font-size:14px;padding:6px 0}
   #msg{font-size:14px;min-height:20px;margin-top:8px;text-align:center}
   h2{font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin:0 0 8px}
+  .grp{font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.7px;
+       padding:14px 4px 6px;font-weight:700}
+  .grp:first-child{padding-top:2px}
+  .sub{display:block;font-size:12px;color:var(--dim);font-weight:400}
+  .hide{display:none}
 </style>
 </head>
 <body>
 
 <h1>Workout Log</h1>
 
-<div class="card">
-  <div class="field">
-    <label for="ex">Exercise</label>
-    <select id="ex"></select>
-  </div>
-  <div class="last" id="last"></div>
-  <div class="row field">
-    <div>
-      <label for="kg">Weight (kg)</label>
-      <input id="kg" type="number" inputmode="decimal" step="0.5" placeholder="16">
-    </div>
-    <div>
-      <label for="reps">Reps</label>
-      <input id="reps" type="number" inputmode="numeric" placeholder="12">
-    </div>
-  </div>
-  <div class="field">
-    <label for="date">Date</label>
-    <input id="date" type="date">
-  </div>
-  <button id="save">Save</button>
-  <div id="msg"></div>
+<div class="tabs">
+  <button id="tabLog" class="on">Log</button>
+  <button id="tabRec">Records</button>
 </div>
 
-<div class="card">
-  <h2>History</h2>
-  <div id="hist"><div class="empty">Pick an exercise.</div></div>
+<!-- ===== LOG TAB ===== -->
+<div id="viewLog">
+  <div class="card">
+    <div class="field">
+      <label for="ex">Exercise</label>
+      <select id="ex"></select>
+    </div>
+    <div class="last" id="last"></div>
+    <div class="row field">
+      <div>
+        <label for="kg">Weight (kg)</label>
+        <input id="kg" type="number" inputmode="decimal" step="0.5" placeholder="16">
+      </div>
+      <div>
+        <label for="reps">Reps</label>
+        <input id="reps" type="number" inputmode="numeric" placeholder="12">
+      </div>
+    </div>
+    <div class="field">
+      <label for="date">Date</label>
+      <input id="date" type="date">
+    </div>
+    <button id="save">Save</button>
+    <div id="msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>History</h2>
+    <div id="hist"><div class="empty">Pick an exercise.</div></div>
+  </div>
+</div>
+
+<!-- ===== RECORDS TAB ===== -->
+<div id="viewRec" class="hide">
+  <div class="card">
+    <h2>Personal Bests</h2>
+    <div id="rec"><div class="empty">Loading…</div></div>
+  </div>
 </div>
 
 <script>
@@ -106,11 +134,21 @@ for (const [group, list] of Object.entries(PLAN)) {
 $("date").value = new Date().toLocaleDateString("en-CA");
 exSel.value = localStorage.getItem("lastEx") || exSel.options[0].value;
 
-const fmtDate = s => {
-  const [y,m,d] = s.split("-");
-  return `${d}/${m}/${y.slice(2)}`;
-};
+const fmtDate = s => { const [y,m,d] = s.split("-"); return `${d}/${m}/${y.slice(2)}`; };
 
+/* ---------- tabs ---------- */
+function show(tab) {
+  const isLog = tab === "log";
+  $("viewLog").classList.toggle("hide", !isLog);
+  $("viewRec").classList.toggle("hide", isLog);
+  $("tabLog").classList.toggle("on", isLog);
+  $("tabRec").classList.toggle("on", !isLog);
+  if (!isLog) loadRecords();
+}
+$("tabLog").onclick = () => show("log");
+$("tabRec").onclick = () => show("rec");
+
+/* ---------- log tab ---------- */
 async function load() {
   const name = exSel.value;
   localStorage.setItem("lastEx", name);
@@ -119,8 +157,7 @@ async function load() {
     .select("id,logged_on,weight_kg,reps")
     .eq("exercise", name)
     .order("logged_on", { ascending:false })
-    .order("id", { ascending:false })
-    .limit(20);
+    .order("id", { ascending:false });
 
   if (error) { $("hist").innerHTML = `<div class="empty">${error.message}</div>`; return; }
 
@@ -145,10 +182,57 @@ async function load() {
     return `<tr><td class="d">${fmtDate(r.logged_on)}</td>
       <td>${r.reps ? r.reps + " reps" : ""}</td>
       <td class="w">${r.weight_kg ?? "–"} kg</td>
-      <td class="x">${arrow}</td></tr>`;
+      <td class="x">${arrow}</td>
+      <td class="del"><button data-id="${r.id}" title="Delete">×</button></td></tr>`;
   }).join("") + "</table>";
+
+  $("hist").querySelectorAll("button[data-id]").forEach(b => {
+    b.onclick = () => removeRow(Number(b.dataset.id));
+  });
 }
 
+async function removeRow(id) {
+  if (!confirm("Delete this record?")) return;
+  const { error } = await sb.from("workout_log").delete().eq("id", id);
+  if (error) { alert(error.message); return; }
+  load();
+}
+
+/* ---------- records tab ---------- */
+async function loadRecords() {
+  $("rec").innerHTML = '<div class="empty">Loading…</div>';
+  const { data, error } = await sb.from("workout_log")
+    .select("muscle_group,exercise,logged_on,weight_kg")
+    .order("weight_kg", { ascending:false })
+    .order("logged_on", { ascending:false });
+
+  if (error) { $("rec").innerHTML = `<div class="empty">${error.message}</div>`; return; }
+
+  // best row per exercise (first hit wins, already sorted heaviest first)
+  const best = {};
+  data.forEach(r => { if (!best[r.exercise]) best[r.exercise] = r; });
+
+  let html = "", any = false;
+  for (const [group, list] of Object.entries(PLAN)) {
+    const rows = list.filter(n => best[n]);
+    if (!rows.length) continue;
+    any = true;
+    html += `<div class="grp">${group}</div><table>`;
+    rows.forEach(n => {
+      const b = best[n];
+      html += `<tr>
+        <td>${n}</td>
+        <td class="w">${b.weight_kg} kg</td>
+        <td class="d" style="text-align:right">${fmtDate(b.logged_on)}</td>
+      </tr>`;
+    });
+    html += "</table>";
+  }
+
+  $("rec").innerHTML = any ? html : '<div class="empty">Nothing logged yet.</div>';
+}
+
+/* ---------- save ---------- */
 $("save").onclick = async () => {
   const kg = $("kg").value.trim();
   if (kg === "") { $("msg").innerHTML = '<span class="down">Enter a weight.</span>'; return; }

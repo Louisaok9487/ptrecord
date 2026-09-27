@@ -34,10 +34,11 @@
   .last b{color:var(--text)}
   .up{color:var(--accent)} .down{color:var(--warn)}
   table{width:100%;border-collapse:collapse;font-size:15px}
-  td{padding:9px 4px;border-bottom:1px solid var(--line);vertical-align:top}
-  td.d{color:var(--dim);width:95px;font-size:14px}
+  td{padding:9px 4px;border-bottom:1px solid var(--line);vertical-align:middle}
+  td.d{color:var(--dim);width:78px;font-size:14px;text-align:right;white-space:nowrap}
   td.w{text-align:right;font-weight:600;white-space:nowrap}
-  td.x{width:26px;text-align:right;color:var(--dim)}
+  td.r{color:var(--dim);font-size:14px;text-align:right;white-space:nowrap}
+  td.x{width:24px;text-align:right}
   td.del{width:34px;text-align:right}
   .del button{background:none;border:0;color:var(--dim);font-size:19px;padding:2px 4px;line-height:1}
   .del button:active{color:var(--warn)}
@@ -47,7 +48,7 @@
   .grp{font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.7px;
        padding:14px 4px 6px;font-weight:700}
   .grp:first-child{padding-top:2px}
-  .sub{display:block;font-size:12px;color:var(--dim);font-weight:400}
+  .note{font-size:12px;color:var(--dim);margin-top:10px}
   .hide{display:none}
 </style>
 </head>
@@ -69,12 +70,12 @@
     </div>
     <div class="last" id="last"></div>
     <div class="row field">
-      <div>
+      <div id="kgBox">
         <label for="kg">Weight (kg)</label>
         <input id="kg" type="number" inputmode="decimal" step="0.5" placeholder="16">
       </div>
       <div>
-        <label for="reps">Reps</label>
+        <label for="reps" id="repsLabel">Reps (optional)</label>
         <input id="reps" type="number" inputmode="numeric" placeholder="12">
       </div>
     </div>
@@ -97,6 +98,7 @@
   <div class="card">
     <h2>Personal Bests</h2>
     <div id="rec"><div class="empty">Loading…</div></div>
+    <div class="note"><span class="up">▲</span> = beat your previous best in the last 7 days</div>
   </div>
 </div>
 
@@ -117,8 +119,20 @@ const PLAN = {
   "Abs":   ["Hanging Leg Raises","Reverse Cable Crunch","Decline Weighted Sit Ups","Cable Crunch with Rope","Side Plank with DB Standing Twist","Decline Bench Leg Raises","Ab-Wheel Roll Out"]
 };
 
+// Bodyweight-style exercises: track reps, not weight
+const REP_ONLY = new Set([
+  "Bar Dips (bodyweight)",
+  "Hanging Leg Raises",
+  "Decline Weighted Sit Ups",
+  "Side Plank with DB Standing Twist",
+  "Decline Bench Leg Raises",
+  "Ab-Wheel Roll Out"
+]);
+
 const $ = id => document.getElementById(id);
 const exSel = $("ex");
+const isRep = name => REP_ONLY.has(name);
+const num = v => (v === null || v === undefined || v === "") ? null : Number(v);
 
 for (const [group, list] of Object.entries(PLAN)) {
   const og = document.createElement("optgroup");
@@ -131,10 +145,26 @@ for (const [group, list] of Object.entries(PLAN)) {
   exSel.appendChild(og);
 }
 
-$("date").value = new Date().toLocaleDateString("en-CA");
+const today = () => new Date().toLocaleDateString("en-CA");
+$("date").value = today();
 exSel.value = localStorage.getItem("lastEx") || exSel.options[0].value;
 
 const fmtDate = s => { const [y,m,d] = s.split("-"); return `${d}/${m}/${y.slice(2)}`; };
+
+// Score used for "best" and progress: weight for normal, reps for rep-only.
+// Tie on weight -> higher reps wins.
+const score = (r, rep) => rep ? num(r.reps) : num(r.weight_kg);
+const better = (a, b, rep) => {
+  const sa = score(a, rep), sb2 = score(b, rep);
+  if (sa === null) return false;
+  if (sb2 === null) return true;
+  if (sa !== sb2) return sa > sb2;
+  if (!rep) return (num(a.reps) || 0) > (num(b.reps) || 0);
+  return false;
+};
+const fmtBest = (r, rep) => rep
+  ? `${r.reps} reps`
+  : `${Number(r.weight_kg)} kg${r.reps ? ` × ${r.reps}` : ""}`;
 
 /* ---------- tabs ---------- */
 function show(tab) {
@@ -148,11 +178,22 @@ function show(tab) {
 $("tabLog").onclick = () => show("log");
 $("tabRec").onclick = () => show("rec");
 
+/* ---------- form mode ---------- */
+function setMode() {
+  const rep = isRep(exSel.value);
+  $("kgBox").classList.toggle("hide", rep);
+  $("repsLabel").textContent = rep ? "Reps" : "Reps (optional)";
+  $("kg").value = "";
+}
+
 /* ---------- log tab ---------- */
 async function load() {
   const name = exSel.value;
+  const rep = isRep(name);
   localStorage.setItem("lastEx", name);
+  setMode();
   $("hist").innerHTML = '<div class="empty">Loading…</div>';
+
   const { data, error } = await sb.from("workout_log")
     .select("id,logged_on,weight_kg,reps")
     .eq("exercise", name)
@@ -167,27 +208,34 @@ async function load() {
     return;
   }
 
-  const best = Math.max(...data.map(r => Number(r.weight_kg) || 0));
+  const valid = data.filter(r => score(r, rep) !== null);
+  const best = valid.reduce((b, r) => (!b || better(r, b, rep)) ? r : b, null);
   const l = data[0];
-  $("last").innerHTML = `Last: <b>${l.weight_kg ?? "–"} kg</b>${l.reps ? " × " + l.reps : ""} on <b>${fmtDate(l.logged_on)}</b> &nbsp;·&nbsp; Best: <b>${best} kg</b>`;
+  const lastTxt = score(l, rep) !== null ? fmtBest(l, rep) : "–";
+  $("last").innerHTML = `Last: <b>${lastTxt}</b> on <b>${fmtDate(l.logged_on)}</b>`
+    + (best ? ` &nbsp;·&nbsp; Best: <b>${fmtBest(best, rep)}</b>` : "");
 
   $("hist").innerHTML = "<table>" + data.map((r,i) => {
     const prev = data[i+1];
     let arrow = "";
-    if (prev && r.weight_kg != null && prev.weight_kg != null) {
-      const diff = Number(r.weight_kg) - Number(prev.weight_kg);
-      if (diff > 0) arrow = '<span class="up">▲</span>';
-      else if (diff < 0) arrow = '<span class="down">▼</span>';
+    const a = score(r, rep), b = prev ? score(prev, rep) : null;
+    if (a !== null && b !== null) {
+      if (a > b) arrow = '<span class="up">▲</span>';
+      else if (a < b) arrow = '<span class="down">▼</span>';
     }
-    return `<tr><td class="d">${fmtDate(r.logged_on)}</td>
-      <td>${r.reps ? r.reps + " reps" : ""}</td>
-      <td class="w">${r.weight_kg ?? "–"} kg</td>
+    const main = rep
+      ? (r.reps ? `${r.reps} reps` : "–")
+      : (r.weight_kg != null ? `${Number(r.weight_kg)} kg` : "–");
+    const side = (!rep && r.reps) ? `${r.reps} reps` : "";
+    return `<tr><td class="d" style="text-align:left">${fmtDate(r.logged_on)}</td>
+      <td class="r" style="text-align:left">${side}</td>
+      <td class="w">${main}</td>
       <td class="x">${arrow}</td>
       <td class="del"><button data-id="${r.id}" title="Delete">×</button></td></tr>`;
   }).join("") + "</table>";
 
-  $("hist").querySelectorAll("button[data-id]").forEach(b => {
-    b.onclick = () => removeRow(Number(b.dataset.id));
+  $("hist").querySelectorAll("button[data-id]").forEach(btn => {
+    btn.onclick = () => removeRow(Number(btn.dataset.id));
   });
 }
 
@@ -202,28 +250,40 @@ async function removeRow(id) {
 async function loadRecords() {
   $("rec").innerHTML = '<div class="empty">Loading…</div>';
   const { data, error } = await sb.from("workout_log")
-    .select("muscle_group,exercise,logged_on,weight_kg")
-    .order("weight_kg", { ascending:false })
-    .order("logged_on", { ascending:false });
+    .select("exercise,logged_on,weight_kg,reps");
 
   if (error) { $("rec").innerHTML = `<div class="empty">${error.message}</div>`; return; }
 
-  // best row per exercise (first hit wins, already sorted heaviest first)
-  const best = {};
-  data.forEach(r => { if (!best[r.exercise]) best[r.exercise] = r; });
+  const d = new Date(); d.setDate(d.getDate() - 7);
+  const cutoff = d.toLocaleDateString("en-CA");
+
+  // per exercise: overall best, best in last 7 days, best before that
+  const stats = {};
+  data.forEach(r => {
+    const rep = isRep(r.exercise);
+    if (score(r, rep) === null) return;
+    const s = stats[r.exercise] || (stats[r.exercise] = { best:null, recent:null, older:null });
+    if (!s.best || better(r, s.best, rep) ||
+        (score(r, rep) === score(s.best, rep) && r.logged_on > s.best.logged_on && !better(s.best, r, rep))) s.best = r;
+    const key = r.logged_on > cutoff ? "recent" : "older";
+    if (!s[key] || better(r, s[key], rep)) s[key] = r;
+  });
 
   let html = "", any = false;
   for (const [group, list] of Object.entries(PLAN)) {
-    const rows = list.filter(n => best[n]);
+    const rows = list.filter(n => stats[n]);
     if (!rows.length) continue;
     any = true;
     html += `<div class="grp">${group}</div><table>`;
     rows.forEach(n => {
-      const b = best[n];
+      const rep = isRep(n);
+      const s = stats[n];
+      const up = s.recent && s.older && score(s.recent, rep) > score(s.older, rep);
       html += `<tr>
         <td>${n}</td>
-        <td class="w">${b.weight_kg} kg</td>
-        <td class="d" style="text-align:right">${fmtDate(b.logged_on)}</td>
+        <td class="w">${fmtBest(s.best, rep)}</td>
+        <td class="d">${fmtDate(s.best.logged_on)}</td>
+        <td class="x">${up ? '<span class="up">▲</span>' : ""}</td>
       </tr>`;
     });
     html += "</table>";
@@ -234,17 +294,22 @@ async function loadRecords() {
 
 /* ---------- save ---------- */
 $("save").onclick = async () => {
-  const kg = $("kg").value.trim();
-  if (kg === "") { $("msg").innerHTML = '<span class="down">Enter a weight.</span>'; return; }
   const opt = exSel.selectedOptions[0];
+  const rep = isRep(opt.value);
+  const kg = $("kg").value.trim();
+  const reps = $("reps").value.trim();
+
+  if (rep && reps === "") { $("msg").innerHTML = '<span class="down">Enter reps.</span>'; return; }
+  if (!rep && kg === "")  { $("msg").innerHTML = '<span class="down">Enter a weight.</span>'; return; }
+
   $("save").disabled = true; $("msg").textContent = "Saving…";
 
   const { error } = await sb.from("workout_log").insert({
-    logged_on: $("date").value,
+    logged_on: $("date").value || today(),
     muscle_group: opt.dataset.group,
     exercise: opt.value,
-    weight_kg: Number(kg),
-    reps: $("reps").value ? Number($("reps").value) : null
+    weight_kg: rep ? null : Number(kg),
+    reps: reps === "" ? null : Number(reps)
   });
 
   $("save").disabled = false;

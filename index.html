@@ -54,6 +54,11 @@
   .grp:first-child{padding-top:2px}
   .note{font-size:12px;color:var(--dim);margin-top:10px}
   .hide{display:none}
+  .hint{font-size:14px;color:var(--accent);background:rgba(74,222,128,.1);
+       border:1px solid rgba(74,222,128,.35);border-radius:10px;padding:9px 11px;margin:-4px 0 12px}
+  .stall{color:var(--dim)}
+  #chart svg{width:100%;height:auto;display:block}
+  #chart text{fill:var(--dim);font-size:10px}
 </style>
 </head>
 <body>
@@ -76,6 +81,7 @@
       <select id="ex"></select>
     </div>
     <div class="last" id="last"></div>
+    <div class="hint hide" id="hint"></div>
     <div class="row field">
       <div id="kgBox">
         <label for="kg">Weight (kg)</label>
@@ -94,6 +100,11 @@
     <div id="msg"></div>
   </div>
 
+  <div class="card hide" id="chartCard">
+    <h2>Weight Progress</h2>
+    <div id="chart"></div>
+  </div>
+
   <div class="card">
     <h2>History</h2>
     <div id="hist"><div class="empty">Pick an exercise.</div></div>
@@ -105,7 +116,8 @@
   <div class="card">
     <h2>Personal Bests</h2>
     <div id="rec"><div class="empty">Loading…</div></div>
-    <div class="note"><span class="up">▲</span> = beat your previous best in the last 7 days</div>
+    <div class="note"><span class="up">▲</span> = beat your previous best in the last 7 days<br>
+      <span class="stall">●</span> = no new best for 3+ weeks, despite training it</div>
   </div>
 </div>
 
@@ -135,6 +147,12 @@ const REP_ONLY = new Set([
   "Decline Bench Leg Raises",
   "Ab-Wheel Roll Out"
 ]);
+
+// "Ready to go heavier": hit TARGET_REPS at the same top weight in 2 separate sessions
+const TARGET_REPS = 12;
+const STALL_DAYS = 21;
+// Suggested jump: dumbbells +2 kg, everything else +5 kg
+const stepFor = name => /\bDB\b|Dumbbell|Hammer Curls/i.test(name) ? 2 : 5;
 
 const $ = id => document.getElementById(id);
 const exSel = $("ex");
@@ -173,6 +191,56 @@ const fmtBest = (r, rep) => rep
   ? `${r.reps} reps`
   : `${Number(r.weight_kg)} kg${r.reps ? ` × ${r.reps}` : ""}`;
 
+// One point per date: heaviest weight that day (and the most reps at that weight)
+function perDay(rows) {
+  const m = {};
+  rows.forEach(r => {
+    const w = num(r.weight_kg);
+    if (w === null) return;
+    const cur = m[r.logged_on];
+    if (!cur || w > cur.w || (w === cur.w && (num(r.reps) || 0) > cur.reps))
+      m[r.logged_on] = { date:r.logged_on, w, reps:num(r.reps) || 0 };
+  });
+  return Object.values(m).sort((a,b) => a.date < b.date ? -1 : 1);
+}
+
+function heavierHint(name, rows) {
+  const days = perDay(rows);
+  if (days.length < 2) return null;
+  const top = Math.max(...days.map(d => d.w));
+  const [a, b] = days.slice(-2);
+  if (a.w === top && b.w === top && a.reps >= TARGET_REPS && b.reps >= TARGET_REPS)
+    return `💪 ${TARGET_REPS}+ reps at ${top} kg twice — try <b>${top + stepFor(name)} kg</b> next time.`;
+  return null;
+}
+
+function drawChart(rows) {
+  const pts = perDay(rows);
+  if (pts.length < 2) {
+    $("chart").innerHTML = '<div class="empty">Needs 2+ days of data to draw.</div>';
+    return;
+  }
+  const W = 300, H = 130, L = 30, R = 8, T = 10, B = 20;
+  const t = s => new Date(s + "T00:00:00").getTime();
+  const x0 = t(pts[0].date), x1 = t(pts.at(-1).date);
+  let lo = Math.min(...pts.map(p => p.w)), hi = Math.max(...pts.map(p => p.w));
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const X = s => L + (t(s) - x0) / (x1 - x0) * (W - L - R);
+  const Y = w => T + (hi - w) / (hi - lo) * (H - T - B);
+  const line = pts.map(p => `${X(p.date).toFixed(1)},${Y(p.w).toFixed(1)}`).join(" ");
+  const dots = pts.map(p => `<circle cx="${X(p.date)}" cy="${Y(p.w)}" r="3" fill="#4ade80"/>`).join("");
+  $("chart").innerHTML = `<svg viewBox="0 0 ${W} ${H}">
+    <line x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}" stroke="#2b3242"/>
+    <line x1="${L}" y1="${T}" x2="${L}" y2="${H-B}" stroke="#2b3242"/>
+    <text x="${L-4}" y="${Y(hi)+3}" text-anchor="end">${+hi.toFixed(1)}</text>
+    <text x="${L-4}" y="${Y(lo)+3}" text-anchor="end">${+lo.toFixed(1)}</text>
+    <text x="${L}" y="${H-5}">${fmtDate(pts[0].date)}</text>
+    <text x="${W-R}" y="${H-5}" text-anchor="end">${fmtDate(pts.at(-1).date)}</text>
+    <polyline points="${line}" fill="none" stroke="#4ade80" stroke-width="2"/>
+    ${dots}
+  </svg>`;
+}
+
 /* ---------- tabs ---------- */
 function show(tab) {
   const isLog = tab === "log";
@@ -199,6 +267,9 @@ async function load() {
   const rep = isRep(name);
   localStorage.setItem("lastEx", name);
   setMode();
+  $("hint").classList.add("hide");
+  $("chartCard").classList.toggle("hide", rep);
+  $("chart").innerHTML = "";
   $("hist").innerHTML = '<div class="empty">Loading…</div>';
 
   const { data, error } = await sb.from("workout_log")
@@ -221,6 +292,12 @@ async function load() {
   const lastTxt = score(l, rep) !== null ? fmtBest(l, rep) : "–";
   $("last").innerHTML = `Last: <b>${lastTxt}</b> on <b>${fmtDate(l.logged_on)}</b>`
     + (best ? ` &nbsp;·&nbsp; Best: <b>${fmtBest(best, rep)}</b>` : "");
+
+  if (!rep) {
+    const h = heavierHint(name, data);
+    if (h) { $("hint").innerHTML = h; $("hint").classList.remove("hide"); }
+    drawChart(data);
+  }
 
   $("hist").innerHTML = "<table>" + data.map((r,i) => {
     const prev = data[i+1];
@@ -274,6 +351,18 @@ async function loadRecords() {
         (score(r, rep) === score(s.best, rep) && r.logged_on > s.best.logged_on && !better(s.best, r, rep))) s.best = r;
     const key = r.logged_on > cutoff ? "recent" : "older";
     if (!s[key] || better(r, s[key], rep)) s[key] = r;
+    if (!s.lastDate || r.logged_on > s.lastDate) s.lastDate = r.logged_on;
+  });
+
+  // Stalled: the top score was first reached 21+ days ago, and you've trained it since
+  const sd = new Date(); sd.setDate(sd.getDate() - STALL_DAYS);
+  const stallCut = sd.toLocaleDateString("en-CA");
+  data.forEach(r => {
+    const s = stats[r.exercise];
+    if (!s) return;
+    const rep = isRep(r.exercise);
+    if (score(r, rep) === score(s.best, rep) && (!s.firstBest || r.logged_on < s.firstBest))
+      s.firstBest = r.logged_on;
   });
 
   let html = "", any = false;
@@ -290,7 +379,8 @@ async function loadRecords() {
         <td>${n}</td>
         <td class="w">${fmtBest(s.best, rep)}</td>
         <td class="d">${fmtDate(s.best.logged_on)}</td>
-        <td class="x">${up ? '<span class="up">▲</span>' : ""}</td>
+        <td class="x">${up ? '<span class="up">▲</span>'
+          : (s.firstBest <= stallCut && s.lastDate > s.firstBest) ? '<span class="stall">●</span>' : ""}</td>
       </tr>`;
     });
     html += "</table>";

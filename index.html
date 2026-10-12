@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Workout Log</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{
     --bg:#11131a; --card:#1b1f2a; --line:#2b3242;
@@ -122,9 +121,50 @@
 </div>
 
 <script>
-const SUPABASE_URL = "https://tnujsnfzymuuvgpewlfs.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRudWpzbmZ6eW11dXZncGV3bGZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NTE5OTQsImV4cCI6MjA4ODIyNzk5NH0.hsLfEeV7kzhguWyWFh9eBt7AcPhw8cQlCOiUzzgysjc";
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyuosk-D7P_mL10OHXw50vKqHhX4_7vm2_MiuzBjfA1uJ_J2lP-mw_qPxfHmij9BYxJWw/exec";
+let allRecords = [];
+
+async function apiRequest(payload) {
+  const options = payload ? {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(payload)
+  } : { method: "GET", cache: "no-store" };
+  const response = await fetch(APPS_SCRIPT_URL, options);
+  if (!response.ok) throw new Error("Request failed: " + response.status);
+  const text = await response.text();
+  let result;
+  try { result = JSON.parse(text); }
+  catch { throw new Error("Invalid response from Google Sheet"); }
+  if (!result.ok) throw new Error(result.error || "Google Sheet request failed");
+  return result;
+}
+
+function normaliseDate(value) {
+  if (!value) return "";
+  const text = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return text.slice(0, 10);
+  return date.toLocaleDateString("en-CA", { timeZone: "Pacific/Auckland" });
+}
+
+function normaliseRecord(record) {
+  return {
+    ...record,
+    id: Number(record.id),
+    logged_on: normaliseDate(record.logged_on),
+    weight_kg: record.weight_kg === "" || record.weight_kg == null ? null : Number(record.weight_kg),
+    reps: record.reps === "" || record.reps == null ? null : Number(record.reps)
+  };
+}
+
+async function refreshRecords() {
+  const result = await apiRequest();
+  allRecords = (result.records || []).map(normaliseRecord);
+  allRecords.sort((a, b) => String(b.logged_on).localeCompare(String(a.logged_on)) || Number(b.id) - Number(a.id));
+  return allRecords;
+}
 
 const PLAN = {
   "Chest": ["DB Incline Press","Incline DB Fly","Front Machine Press","Cross Cable","Cable Fly","Flat Bench DB Press","Bar Dips (bodyweight)"],
@@ -272,13 +312,14 @@ async function load() {
   $("chart").innerHTML = "";
   $("hist").innerHTML = '<div class="empty">Loading…</div>';
 
-  const { data, error } = await sb.from("workout_log")
-    .select("id,logged_on,weight_kg,reps")
-    .eq("exercise", name)
-    .order("logged_on", { ascending:false })
-    .order("id", { ascending:false });
-
-  if (error) { $("hist").innerHTML = `<div class="empty">${error.message}</div>`; return; }
+  let data;
+  try {
+    await refreshRecords();
+    data = allRecords.filter(r => r.exercise === name);
+  } catch (error) {
+    $("hist").innerHTML = `<div class="empty">${error.message}</div>`;
+    return;
+  }
 
   if (!data.length) {
     $("last").innerHTML = "No record yet — first one sets the baseline.";
@@ -325,18 +366,24 @@ async function load() {
 
 async function removeRow(id) {
   if (!confirm("Delete this record?")) return;
-  const { error } = await sb.from("workout_log").delete().eq("id", id);
-  if (error) { alert(error.message); return; }
-  load();
+  try {
+    await apiRequest({ action: "delete", id: String(id) });
+    await load();
+  } catch (error) {
+    alert(error.message);
+  }
 }
 
 /* ---------- records tab ---------- */
 async function loadRecords() {
   $("rec").innerHTML = '<div class="empty">Loading…</div>';
-  const { data, error } = await sb.from("workout_log")
-    .select("exercise,logged_on,weight_kg,reps");
-
-  if (error) { $("rec").innerHTML = `<div class="empty">${error.message}</div>`; return; }
+  let data;
+  try {
+    data = await refreshRecords();
+  } catch (error) {
+    $("rec").innerHTML = `<div class="empty">${error.message}</div>`;
+    return;
+  }
 
   const d = new Date(); d.setDate(d.getDate() - 7);
   const cutoff = d.toLocaleDateString("en-CA");
@@ -401,20 +448,27 @@ $("save").onclick = async () => {
 
   $("save").disabled = true; $("msg").textContent = "Saving…";
 
-  const { error } = await sb.from("workout_log").insert({
-    logged_on: $("date").value || today(),
-    muscle_group: opt.dataset.group,
-    exercise: opt.value,
-    weight_kg: rep ? null : Number(kg),
-    reps: reps === "" ? null : Number(reps)
-  });
-
-  $("save").disabled = false;
-  if (error) { $("msg").innerHTML = `<span class="down">${error.message}</span>`; return; }
-  $("msg").innerHTML = '<span class="up">Saved ✓</span>';
-  $("kg").value = ""; $("reps").value = "";
-  setTimeout(() => $("msg").textContent = "", 2000);
-  load();
+  try {
+    await apiRequest({
+      action: "add",
+      record: {
+        logged_on: $("date").value || today(),
+        muscle_group: opt.dataset.group,
+        exercise: opt.value,
+        weight_kg: rep ? null : Number(kg),
+        reps: reps === "" ? null : Number(reps),
+        note: ""
+      }
+    });
+    $("msg").innerHTML = '<span class="up">Saved ✓</span>';
+    $("kg").value = ""; $("reps").value = "";
+    setTimeout(() => $("msg").textContent = "", 2000);
+    await load();
+  } catch (error) {
+    $("msg").innerHTML = `<span class="down">${error.message}</span>`;
+  } finally {
+    $("save").disabled = false;
+  }
 };
 
 exSel.onchange = load;
